@@ -72,9 +72,21 @@ Whenever a new value is set, it is type-checked.
 
 import functools
 import inspect
+from operator import attrgetter
 from typing import Any
 
 import pydantic
+from pydantic.utils import deep_update
+
+
+class Dependency:
+    def __init__(self, fn, dependencies):
+        self.fn = fn
+        self.dependencies = dependencies
+
+    def resolve(self, env):
+        kwargs = {key: env[key] for key in self.dependencies}
+        return self.fn(**kwargs)
 
 
 class _Config:
@@ -83,19 +95,24 @@ class _Config:
 
 class Settings:
     _cls_types: dict = {}
+    _cls_deps: dict = {}
 
     def __init_subclass__(cls):
         cls._cls_types = {}
 
         for name, ty in cls.__annotations__.items():
-            default = getattr(cls, name, ...)
-            cls._cls_types[name] = ty, default
+            if ty == Dependency:
+                cls._cls_deps[name] = getattr(cls, name)
+            else:
+                default = getattr(cls, name, ...)
+                cls._cls_types[name] = ty, default
 
     def __init__(self, *args, **kwargs):
         # mapping of key to type, see `_declare` for more info on how this
         # works
         self._types = {}
         self._default = {}
+        self._dependencies = {}
         self._context_count = 0
 
         # We essentially implement our own chainmap, managed by a list. New
@@ -110,6 +127,10 @@ class Settings:
         for key, (ty, default) in self._cls_types.items():
             self._declare(key, ty, default=default)
 
+        # Same thing for dependencies.
+        for name, fn in self._cls_deps.items():
+            self._dependency(name, fn)
+
     def _reduce(self):
         """"""
 
@@ -121,9 +142,12 @@ class Settings:
 
         self._chain = [self._default, compact]
 
-    def _declare(self, key, type=Any, *, default=..., force=False):
-        assert (
-            force or key not in self._types
+    def _already_declared(self, key):
+        return key in self._types or key in self._dependencies
+
+    def _declare(self, key, type=Any, *, default=...):
+        assert not self._already_declared(
+            key
         ), f"Attempt of overwriting already declared value {key}"
 
         # This is kinda hacky. For each key, we create a new pydantic model,
@@ -148,6 +172,15 @@ class Settings:
         if default != ...:
             self._set_(self._default, key, default)
 
+    def _dependency(self, name, fn):
+        dependencies = list(inspect.signature(fn).parameters)
+        for dependency in dependencies:
+            assert self._already_declared(
+                dependency
+            ), f"`{name}` depends on `{dependency}`, which has not been declared yet."
+
+        self._dependencies[name] = Dependency(fn, dependencies)
+
     def _get(self, key, default=None):
         """Like `dict.get`."""
         try:
@@ -155,9 +188,20 @@ class Settings:
         except KeyError:
             return default
 
+    def __contains__(self, key):
+        try:
+            self[key]
+            return True
+        except KeyError:
+            return False
+
     def __getitem__(self, key):
         # Iterate all dicts, last to first, and return value as soon as one is
         # found.
+
+        if key in self._dependencies:
+            return self._dependencies[key].resolve(self)
+
         for dct in reversed(self._chain):
             try:
                 return dct[key]
@@ -179,10 +223,23 @@ class Settings:
         Uses `_types` to type-check the value, before assigning.
         """
 
+        assert key not in self._dependencies, "Can't override dependency."
+
         # If we have type-information, we apply the pydantic-model to the value
         model = self._types.get(key)
         if model is not None:
-            value = getattr(model.parse_obj({key: value}), key)
+            # If `settings.foo` is a pydantic model, we want to allow partial
+            # assignment: `settings.foo = {"b": 1}` should only set `b`
+            # Thus we check whether we are dealing with a pydantic model and if
+            # we are also assigning a `dict`:
+            type_ = model.__fields__[key].type_
+
+            if issubclass(type_, pydantic.BaseModel) and isinstance(
+                value, dict
+            ):
+                value = type_.parse_obj(deep_update(self[key].dict(), value))
+            else:
+                value = getattr(model.parse_obj({key: value}), key)
 
         dct[key] = value
 
@@ -229,7 +286,7 @@ class Settings:
         """
         return _ScopedSettings(self, kwargs)
 
-    def _inject(self, *keys):
+    def _inject(self, *keys, **kwargs):
         """Dependency injection.
 
         This will inject values from settings if avaiable and not passed
@@ -255,17 +312,30 @@ class Settings:
             # We need the signature to be able to assemble the args later.
             sig = inspect.signature(fn)
 
+            getters = {}
+
             for key in keys:
                 assert key in sig.parameters, f"Key {key} not in arguments."
+                getters[key] = attrgetter(key)
+
+            for key, path in kwargs.items():
+                assert key in sig.parameters, f"Key {key} not in arguments."
+                assert key not in getters, f"Key {key} defined twice."
+                getters[key] = attrgetter(path)
 
             @functools.wraps(fn)
             def wrapper(*args, **kwargs):
                 # arguments are always keyword params
                 arguments = sig.bind_partial(*args, **kwargs).arguments
 
-                setting_kwargs = {
-                    key: self[key] for key in keys if key not in arguments
-                }
+                setting_kwargs = {}
+
+                for key, getter in getters.items():
+                    if key not in arguments:
+                        try:
+                            setting_kwargs[key] = getter(self)
+                        except (KeyError, AttributeError):
+                            continue
 
                 return fn(**arguments, **setting_kwargs)
 

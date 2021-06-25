@@ -14,10 +14,9 @@
 import inspect
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Tuple, Union, cast
+from typing import List, Optional, Tuple, cast, Type
 
 import mxnet as mx
-import numpy as np
 from mxnet.gluon.block import _flatten
 
 from gluonts.core.serde import dump_json, load_json
@@ -122,14 +121,20 @@ def copy_parameters(
         )
 
 
-def get_hybrid_forward_input_names(hb: mx.gluon.HybridBlock):
-    params = inspect.signature(hb.hybrid_forward).parameters
+def get_hybrid_forward_input_names(
+    hybrid_block_type: Type[mx.gluon.HybridBlock],
+):
+    params = inspect.signature(hybrid_block_type.hybrid_forward).parameters
     param_names = [k for k, v in params.items() if not str(v).startswith("*")]
-    assert param_names[0] == "F", (
-        f"Expected first argument of HybridBlock to be `F`, "
+    assert param_names[0] == "self", (
+        f"Expected first argument of hybrid_forward to be `self`, "
         f"but found `{param_names[0]}`"
     )
-    return param_names[1:]  # skip: F
+    assert param_names[1] == "F", (
+        f"Expected second argument of hybrid_forward to be `F`, "
+        f"but found `{param_names[1]}`"
+    )
+    return param_names[2:]  # skip: self, F
 
 
 # noinspection PyProtectedMember
@@ -397,7 +402,11 @@ def cumsum(
 
 
 def weighted_average(
-    F, x: Tensor, weights: Optional[Tensor] = None, axis: Optional[int] = None
+    F,
+    x: Tensor,
+    weights: Optional[Tensor] = None,
+    axis: Optional[int] = None,
+    include_zeros_in_denominator=False,
 ) -> Tensor:
     """
     Computes the weighted average of a given tensor across a given axis, masking values associated with weight zero,
@@ -413,6 +422,9 @@ def weighted_average(
         Weights tensor, of the same shape as `x`.
     axis
         The axis along which to average `x`
+    include_zeros_in_denominator
+        Include zeros in the denominator. Can be useful for sparse time series
+        because the loss can be dominated by few observed examples.
 
     Returns
     -------
@@ -423,7 +435,11 @@ def weighted_average(
         weighted_tensor = F.where(
             condition=weights, x=x * weights, y=F.zeros_like(x)
         )
-        sum_weights = F.maximum(1.0, weights.sum(axis=axis))
+        if include_zeros_in_denominator:
+            sum_weights = F.maximum(1.0, F.ones_like(weights).sum(axis=axis))
+        else:
+            sum_weights = F.maximum(1.0, weights.sum(axis=axis))
+
         return weighted_tensor.sum(axis=axis) / sum_weights
     else:
         return x.mean(axis=axis)
@@ -458,3 +474,45 @@ def _broadcast_param(param, axes, sizes):
         )
 
     return param
+
+
+def mx_switch(F, *args, **kwargs) -> Tensor:
+    """
+    A switch statement for mxnet.
+
+    mx_switch((A, x), (B, y), z)
+
+    corresponds to
+
+    if A -> x
+    elif B -> y
+    else -> z
+
+    Parameters
+    ----------
+    F
+        The function space to use.
+    args
+        Arguments.
+    kwargs
+        Keyword arguments
+
+    Returns
+    -------
+    Tensor
+        A tensor with the respective switch entries.
+    """
+
+    assert set(kwargs.keys()).issubset({"scope"})
+    assert len(args) >= 3
+    else_stmt = args[-1]
+    assert not isinstance(
+        else_stmt, (tuple, list)
+    ), "Last element should be the else clause"
+
+    rev_when_stmts = args[:-1][::-1]
+
+    cur_else = else_stmt
+    for cond, then_stmt in rev_when_stmts:
+        cur_else = F.where(cond, then_stmt, cur_else)
+    return cur_else

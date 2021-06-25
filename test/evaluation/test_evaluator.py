@@ -329,16 +329,16 @@ RES = [
         "abs_target_sum": 0.0,
         "abs_target_mean": 0.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
-        "MAPE": 0.0,
-        "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MASE": np.nan,
+        "MAPE": np.nan,
+        "sMAPE": np.nan,
+        "MSIS": np.nan,
         "RMSE": 0.0,
-        "NRMSE": 0.0,
-        "ND": 0.0,
+        "NRMSE": np.nan,
+        "ND": np.nan,
         "MAE_Coverage": 0.5,
         "mean_absolute_QuantileLoss": 0.0,
-        "mean_wQuantileLoss": 0.0,
+        "mean_wQuantileLoss": np.nan,
     },
     {
         "MSE": 0.0,
@@ -346,10 +346,10 @@ RES = [
         "abs_target_sum": 15.0,
         "abs_target_mean": 1.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
+        "MASE": np.nan,
         "MAPE": 0.0,
         "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MSIS": np.nan,
         "RMSE": 0.0,
         "NRMSE": 0.0,
         "ND": 0.0,
@@ -363,10 +363,10 @@ RES = [
         "abs_target_sum": 14.0,
         "abs_target_mean": 1.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
+        "MASE": np.nan,
         "MAPE": 0.0,
         "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MSIS": np.nan,
         "RMSE": 0.0,
         "NRMSE": 0.0,
         "ND": 0.0,
@@ -414,10 +414,10 @@ RES = [
         "abs_target_sum": 3.0,
         "abs_target_mean": 1.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
+        "MASE": np.nan,
         "MAPE": 0.0,
         "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MSIS": np.nan,
         "RMSE": 0.0,
         "NRMSE": 0.0,
         "ND": 0.0,
@@ -440,7 +440,7 @@ INPUT_TYPE = [iterable, iterable, iterable, iterator, iterator, iterable]
 def test_metrics(timeseries, res, has_nans, input_type):
     ts_datastructure = pd.Series
     evaluator = Evaluator(quantiles=QUANTILES, num_workers=None)
-    agg_metrics, item_metrics = calculate_metrics(
+    agg_metrics, _ = calculate_metrics(
         timeseries,
         evaluator,
         ts_datastructure,
@@ -450,7 +450,7 @@ def test_metrics(timeseries, res, has_nans, input_type):
 
     for metric, score in agg_metrics.items():
         if metric in res.keys():
-            assert abs(score - res[metric]) < 0.001, (
+            assert np.isclose(score, res[metric], equal_nan=True), (
                 "Scores for the metric {} do not match: \nexpected: {} "
                 "\nobtained: {}".format(metric, res[metric], score)
             )
@@ -474,7 +474,7 @@ def test_metrics_mp(timeseries, res, has_nans, input_type):
 
     for metric, score in agg_metrics.items():
         if metric in res.keys():
-            assert abs(score - res[metric]) < 0.001, (
+            assert np.isclose(score, res[metric], equal_nan=True), (
                 "Scores for the metric {} do not match: \nexpected: {} "
                 "\nobtained: {}".format(metric, res[metric], score)
             )
@@ -516,9 +516,9 @@ RES_MULTIVARIATE = [
         "abs_target_sum": 15.0,
         "abs_target_mean": 1.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
+        "MASE": np.nan,
         "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MSIS": np.nan,
         "RMSE": 0.0,
         "NRMSE": 0.0,
         "ND": 0.0,
@@ -531,9 +531,9 @@ RES_MULTIVARIATE = [
         "abs_target_sum": 15.0,
         "abs_target_mean": 1.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
+        "MASE": np.nan,
         "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MSIS": np.nan,
         "RMSE": 0.0,
         "NRMSE": 0.0,
         "ND": 0.0,
@@ -546,9 +546,9 @@ RES_MULTIVARIATE = [
         "abs_target_sum": 30.0,
         "abs_target_mean": 1.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
+        "MASE": np.nan,
         "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MSIS": np.nan,
         "RMSE": 0.0,
         "NRMSE": 0.0,
         "ND": 0.0,
@@ -640,7 +640,7 @@ def test_metrics_multivariate(
 
     for metric, score in agg_metrics.items():
         if metric in res.keys():
-            assert abs(score - res[metric]) < 0.001, (
+            assert np.isclose(score, res[metric], equal_nan=True), (
                 "Scores for the metric {} do not match: \nexpected: {} "
                 "\nobtained: {}".format(metric, res[metric], score)
             )
@@ -698,16 +698,16 @@ RES = [
         "abs_target_sum": 0.0,
         "abs_target_mean": 0.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
-        "MAPE": 0.0,
-        "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MASE": np.nan,
+        "MAPE": np.nan,
+        "sMAPE": np.nan,
+        "MSIS": np.nan,
         "RMSE": 0.0,
-        "NRMSE": 0.0,
-        "ND": 0.0,
+        "NRMSE": np.nan,
+        "ND": np.nan,
         "MAE_Coverage": 0.5,
         "mean_absolute_QuantileLoss": 0.0,
-        "mean_wQuantileLoss": 0.0,
+        "mean_wQuantileLoss": np.nan,
     },
     {
         "RMSLE": 0.0,
@@ -716,10 +716,10 @@ RES = [
         "abs_target_sum": 15.0,
         "abs_target_mean": 1.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
+        "MASE": np.nan,
         "MAPE": 0.0,
         "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MSIS": np.nan,
         "RMSE": 0.0,
         "NRMSE": 0.0,
         "ND": 0.0,
@@ -734,10 +734,10 @@ RES = [
         "abs_target_sum": 14.0,
         "abs_target_mean": 1.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
+        "MASE": np.nan,
         "MAPE": 0.0,
         "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MSIS": np.nan,
         "RMSE": 0.0,
         "NRMSE": 0.0,
         "ND": 0.0,
@@ -824,10 +824,10 @@ RES = [
         "abs_target_sum": 3.0,
         "abs_target_mean": 1.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
+        "MASE": np.nan,
         "MAPE": 0.0,
         "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MSIS": np.nan,
         "RMSE": 0.0,
         "NRMSE": 0.0,
         "ND": 0.0,
@@ -899,7 +899,7 @@ def test_custom_eval_fn(
 
     for metric, score in agg_metrics.items():
         if metric in res.keys():
-            assert abs(score - res[metric]) < 0.001, (
+            assert np.isclose(score, res[metric], equal_nan=True), (
                 "Scores for the metric {} do not match: \nexpected: {} "
                 "\nobtained: {}".format(metric, res[metric], score)
             )
@@ -942,9 +942,9 @@ RES_MULTIVARIATE = [
         "abs_target_sum": 15.0,
         "abs_target_mean": 1.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
+        "MASE": np.nan,
         "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MSIS": np.nan,
         "RMSE": 0.0,
         "NRMSE": 0.0,
         "ND": 0.0,
@@ -958,9 +958,9 @@ RES_MULTIVARIATE = [
         "abs_target_sum": 15.0,
         "abs_target_mean": 1.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
+        "MASE": np.nan,
         "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MSIS": np.nan,
         "RMSE": 0.0,
         "NRMSE": 0.0,
         "ND": 0.0,
@@ -974,9 +974,9 @@ RES_MULTIVARIATE = [
         "abs_target_sum": 30.0,
         "abs_target_mean": 1.0,
         "seasonal_error": 0.0,
-        "MASE": 0.0,
+        "MASE": np.nan,
         "sMAPE": 0.0,
-        "MSIS": 0.0,
+        "MSIS": np.nan,
         "RMSE": 0.0,
         "NRMSE": 0.0,
         "ND": 0.0,
@@ -1089,7 +1089,7 @@ def test_metrics_multivariate_custom_eval_fn(
 
     for metric, score in agg_metrics.items():
         if metric in res.keys():
-            assert abs(score - res[metric]) < 0.001, (
+            assert np.isclose(score, res[metric], equal_nan=True), (
                 "Scores for the metric {} do not match: \nexpected: {} "
                 "\nobtained: {}".format(metric, res[metric], score)
             )

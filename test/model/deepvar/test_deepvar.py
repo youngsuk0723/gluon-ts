@@ -16,8 +16,7 @@ import pytest
 from gluonts.dataset.artificial import constant_dataset
 from gluonts.dataset.common import TrainDatasets
 from gluonts.dataset.multivariate_grouper import MultivariateGrouper
-from gluonts.evaluation import MultivariateEvaluator
-from gluonts.evaluation.backtest import backtest_metrics
+from gluonts.evaluation import backtest_metrics, MultivariateEvaluator
 from gluonts.model.deepvar import DeepVAREstimator
 from gluonts.mx.distribution import (
     LowrankMultivariateGaussianOutput,
@@ -110,6 +109,7 @@ def test_deepvar(
             epochs=1,
             batch_size=8,
             learning_rate=1e-10,
+            minimum_learning_rate=1e-13,
             num_batches_per_epoch=num_batches_per_epoch,
             hybridize=hybridize,
         ),

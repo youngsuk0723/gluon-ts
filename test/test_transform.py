@@ -11,7 +11,7 @@
 # express or implied. See the License for the specific language governing
 # permissions and limitations under the License.
 
-from typing import Tuple
+from typing import Tuple, List
 
 import mxnet as mx
 
@@ -20,6 +20,7 @@ import pandas as pd
 import pytest
 
 import gluonts
+import gluonts.mx.component
 from gluonts import time_feature, transform
 from gluonts.core import fqname_for
 from gluonts.core.serde import dump_code, dump_json, load_code, load_json
@@ -35,6 +36,8 @@ from gluonts.transform import (
     MissingValueImputation,
     RollingMeanValueImputation,
 )
+from gluonts.transform.convert import ToIntervalSizeFormat
+from gluonts.transform.feature import CountTrailingZeros
 
 FREQ = "1D"
 
@@ -223,12 +226,21 @@ def test_InstanceSplitter(
         is_pad_field=FieldName.IS_PAD,
         start_field=FieldName.START,
         forecast_start_field=FieldName.FORECAST_START,
-        train_sampler=transform.UniformSplitSampler(p=1.0),
+        instance_sampler=(
+            transform.UniformSplitSampler(
+                p=1.0,
+                min_past=0 if pick_incomplete else train_length,
+                min_future=lead_time + pred_length,
+            )
+            if is_train
+            else transform.TestSplitSampler(
+                min_past=0 if pick_incomplete else train_length
+            )
+        ),
         past_length=train_length,
         future_length=pred_length,
         lead_time=lead_time,
         time_series_fields=["some_time_feature"],
-        pick_incomplete=pick_incomplete,
     )
 
     assert_serializable(t)
@@ -303,7 +315,18 @@ def test_CanonicalInstanceSplitter(
         is_pad_field=FieldName.IS_PAD,
         start_field=FieldName.START,
         forecast_start_field=FieldName.FORECAST_START,
-        instance_sampler=transform.UniformSplitSampler(p=1.0),
+        instance_sampler=(
+            transform.UniformSplitSampler(
+                p=1.0,
+                min_past=train_length,
+            )
+            if is_train
+            else (
+                transform.ValidationSplitSampler()
+                if allow_target_padding
+                else transform.TestSplitSampler()
+            )
+        ),
         instance_length=train_length,
         prediction_length=pred_length,
         time_series_fields=["some_time_feature"],
@@ -323,7 +346,7 @@ def test_CanonicalInstanceSplitter(
 
     out = list(t.flatmap_transform(data, is_train=is_train))
 
-    min_num_instances = 1 if allow_target_padding else 0
+    min_num_instances = 1 if allow_target_padding and not is_train else 0
     if is_train:
         assert len(out) == max(
             min_num_instances, len(target) - train_length + 1
@@ -384,7 +407,7 @@ def test_Transformation():
                 is_pad_field=FieldName.IS_PAD,
                 start_field=FieldName.START,
                 forecast_start_field=FieldName.FORECAST_START,
-                train_sampler=transform.ExpectedNumInstanceSampler(
+                instance_sampler=transform.ExpectedNumInstanceSampler(
                     num_instances=4
                 ),
                 past_length=train_length,
@@ -455,8 +478,12 @@ def test_multi_dim_transformation(is_train):
                 is_pad_field=FieldName.IS_PAD,
                 start_field=FieldName.START,
                 forecast_start_field=FieldName.FORECAST_START,
-                train_sampler=transform.ExpectedNumInstanceSampler(
-                    num_instances=4
+                instance_sampler=(
+                    transform.ExpectedNumInstanceSampler(
+                        num_instances=4, min_future=pred_length
+                    )
+                    if is_train
+                    else transform.TestSplitSampler()
                 ),
                 past_length=train_length,
                 future_length=pred_length,
@@ -517,12 +544,11 @@ def test_ExpectedNumInstanceSampler():
                 is_pad_field=FieldName.IS_PAD,
                 start_field=FieldName.START,
                 forecast_start_field=FieldName.FORECAST_START,
-                train_sampler=transform.ExpectedNumInstanceSampler(
-                    num_instances=4
+                instance_sampler=transform.ExpectedNumInstanceSampler(
+                    num_instances=4, min_future=pred_length
                 ),
                 past_length=train_length,
                 future_length=pred_length,
-                pick_incomplete=True,
             )
         ]
     )
@@ -559,12 +585,11 @@ def test_BucketInstanceSampler():
                 is_pad_field=FieldName.IS_PAD,
                 start_field=FieldName.START,
                 forecast_start_field=FieldName.FORECAST_START,
-                train_sampler=transform.BucketInstanceSampler(
-                    dataset_stats.scale_histogram
+                instance_sampler=transform.BucketInstanceSampler(
+                    scale_histogram=dataset_stats.scale_histogram
                 ),
                 past_length=train_length,
                 future_length=pred_length,
-                pick_incomplete=True,
             )
         ]
     )
@@ -763,12 +788,10 @@ def point_process_dataset():
 
 
 class MockContinuousTimeSampler(transform.ContinuousTimePointSampler):
-    # noinspection PyMissingConstructor,PyUnusedLocal
-    def __init__(self, ret_values, *args, **kwargs):
-        self._ret_values = ret_values
+    ret_values: List[float]
 
     def __call__(self, *args, **kwargs):
-        return np.array(self._ret_values)
+        return np.array(self.ret_values)
 
 
 @pytest.fixture
@@ -780,9 +803,13 @@ def test_ctsplitter_mask_sorted(point_process_dataset):
     ts = np.cumsum(ia_times)
 
     splitter = transform.ContinuousTimeInstanceSplitter(
-        2,
-        1,
-        train_sampler=transform.ContinuousTimeUniformSampler(num_instances=10),
+        past_interval_length=2,
+        future_interval_length=1,
+        instance_sampler=transform.ContinuousTimeUniformSampler(
+            num_instances=10,
+            min_past=2,
+            min_future=1,
+        ),
     )
 
     # no boundary conditions
@@ -796,9 +823,12 @@ def test_ctsplitter_mask_sorted(point_process_dataset):
 
 def test_ctsplitter_no_train_last_point(point_process_dataset):
     splitter = transform.ContinuousTimeInstanceSplitter(
-        2,
-        1,
-        train_sampler=transform.ContinuousTimeUniformSampler(num_instances=10),
+        past_interval_length=2,
+        future_interval_length=1,
+        instance_sampler=transform.ContinuousTimePredictionSampler(
+            allow_empty_interval=False,
+            min_past=2,
+        ),
     )
 
     iter_de = splitter(point_process_dataset, is_train=False)
@@ -818,10 +848,10 @@ def test_ctsplitter_no_train_last_point(point_process_dataset):
 
 def test_ctsplitter_train_correct(point_process_dataset):
     splitter = transform.ContinuousTimeInstanceSplitter(
-        1,
-        1,
-        train_sampler=MockContinuousTimeSampler(
-            ret_values=[1.01, 1.5, 1.99], num_instances=3
+        past_interval_length=1,
+        future_interval_length=1,
+        instance_sampler=MockContinuousTimeSampler(
+            ret_values=[1.01, 1.5, 1.99]
         ),
     )
 
@@ -857,10 +887,10 @@ def test_ctsplitter_train_correct_out_count(point_process_dataset):
                 yield d
 
     splitter = transform.ContinuousTimeInstanceSplitter(
-        1,
-        1,
-        train_sampler=MockContinuousTimeSampler(
-            ret_values=[1.01, 1.5, 1.99], num_instances=3
+        past_interval_length=1,
+        future_interval_length=1,
+        instance_sampler=MockContinuousTimeSampler(
+            ret_values=[1.01, 1.5, 1.99]
         ),
     )
 
@@ -874,7 +904,13 @@ def test_ctsplitter_train_correct_out_count(point_process_dataset):
 def test_ctsplitter_train_samples_correct_times(point_process_dataset):
 
     splitter = transform.ContinuousTimeInstanceSplitter(
-        1.25, 1.25, train_sampler=transform.ContinuousTimeUniformSampler(20)
+        past_interval_length=1.25,
+        future_interval_length=1.25,
+        instance_sampler=transform.ContinuousTimeUniformSampler(
+            num_instances=20,
+            min_past=1.25,
+            min_future=1.25,
+        ),
     )
 
     iter_de = splitter(point_process_dataset, is_train=True)
@@ -895,8 +931,8 @@ def test_ctsplitter_train_short_intervals(point_process_dataset):
     splitter = transform.ContinuousTimeInstanceSplitter(
         0.01,
         0.01,
-        train_sampler=MockContinuousTimeSampler(
-            ret_values=[1.01, 1.5, 1.99], num_instances=3
+        instance_sampler=MockContinuousTimeSampler(
+            ret_values=[1.01, 1.5, 1.99]
         ),
     )
 
@@ -1057,3 +1093,107 @@ def assert_padded_array(
         f"Sampled and reference arrays do not match. '"
         f"Got {sampled_no_padding} but should be {reference_no_padding}."
     )
+
+
+@pytest.mark.parametrize(
+    "target, expected",
+    [
+        ([0, 0, 1, 1, 2, 0, 0], 2),
+        ([0, 0, 1, 1, 2, 0, 0, 0, 0], 4),
+        ([0, 0, 1, 1, 2], 0),
+        ([0, 0], 2),
+        ([], 0),
+    ],
+)
+@pytest.mark.parametrize("convert_to_np", [True, False])
+@pytest.mark.parametrize("is_train", [True, False])
+def test_count_trailing_zeros(target, expected, convert_to_np, is_train):
+    if convert_to_np:
+        target = np.array(target)
+
+    data_set = ListDataset(
+        [{"target": target, "start": "2010-01-01"}], freq="1m"
+    )
+    transform = CountTrailingZeros(new_field="time_remaining")
+
+    transformed = next(transform(data_set, is_train=is_train))
+
+    if len(target) == 0:
+        assert "time_remaining" not in transformed
+        return
+
+    assert "time_remaining" in transformed
+    assert transformed["time_remaining"] == expected
+
+
+@pytest.mark.parametrize(
+    "transform, target, expected",
+    [
+        (
+            ToIntervalSizeFormat(target_field="target"),
+            [0, 0, 1, 0, 3, 2, 0, 4],
+            [[3, 2, 1, 2], [1, 3, 2, 4]],
+        ),
+        (
+            ToIntervalSizeFormat(target_field="target", discard_first=True),
+            [0, 0, 1, 0, 3, 2, 0, 4],
+            [[2, 1, 2], [3, 2, 4]],
+        ),
+        (
+            ToIntervalSizeFormat(target_field="target", discard_first=True),
+            [0, 0, 0, 0, 0, 0],
+            [[], []],
+        ),
+        (
+            ToIntervalSizeFormat(target_field="target", discard_first=False),
+            [0, 0, 0, 0, 0, 0],
+            [[], []],
+        ),
+        (
+            ToIntervalSizeFormat(target_field="target", discard_first=True),
+            [0, 0, 1, 0],
+            [[], []],
+        ),
+        (
+            ToIntervalSizeFormat(
+                target_field="target", discard_first=True, drop_empty=True
+            ),
+            [0, 0, 0, 0, 0, 0],
+            [[], []],
+        ),
+        (
+            ToIntervalSizeFormat(
+                target_field="target", discard_first=False, drop_empty=True
+            ),
+            [0, 0, 0, 0, 0, 0],
+            [[], []],
+        ),
+        (
+            ToIntervalSizeFormat(
+                target_field="target", discard_first=True, drop_empty=True
+            ),
+            [0, 0, 1, 0],
+            [[], []],
+        ),
+    ],
+)
+@pytest.mark.parametrize("convert_to_np", [True, False])
+@pytest.mark.parametrize("is_train", [True, False])
+def test_to_interval_size_format(
+    transform, target, expected, convert_to_np, is_train
+):
+    if convert_to_np:
+        target = np.array(target)
+
+    data_set = ListDataset(
+        [{"target": target, "start": "2010-01-01"}], freq="1m"
+    )
+
+    if transform.drop_empty:
+        try:
+            next(transform(data_set, is_train=is_train))
+        except StopIteration:
+            return
+
+    transformed = next(transform(data_set, is_train=is_train))
+    assert np.allclose(transformed["target"], expected)

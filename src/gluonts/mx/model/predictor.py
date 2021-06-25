@@ -160,21 +160,26 @@ class GluonPredictor(Predictor):
             transform=self.input_transform,
             batch_size=self.batch_size,
             stack_fn=partial(batchify, ctx=self.ctx, dtype=self.dtype),
-            num_workers=num_workers,
-            num_prefetch=num_prefetch,
-            **kwargs,
         )
-        yield from self.forecast_generator(
-            inference_data_loader=inference_data_loader,
-            prediction_net=self.prediction_net,
-            input_names=self.input_names,
-            freq=self.freq,
-            output_transform=self.output_transform,
-            num_samples=num_samples,
-        )
+        with mx.Context(self.ctx):
+            yield from self.forecast_generator(
+                inference_data_loader=inference_data_loader,
+                prediction_net=self.prediction_net,
+                input_names=self.input_names,
+                freq=self.freq,
+                output_transform=self.output_transform,
+                num_samples=num_samples,
+            )
 
     def __eq__(self, that):
         if type(self) != type(that):
+            return False
+
+        if not equals(self.freq, that.freq):
+            return False
+        if not equals(self.prediction_length, that.prediction_length):
+            return False
+        if not equals(self.lead_time, that.lead_time):
             return False
 
         # TODO: also consider equality of the pipelines
@@ -206,6 +211,7 @@ class GluonPredictor(Predictor):
                 batch_size=self.batch_size,
                 prediction_length=self.prediction_length,
                 freq=self.freq,
+                lead_time=self.lead_time,
                 ctx=self.ctx,
                 dtype=self.dtype,
                 forecast_generator=self.forecast_generator,
@@ -304,7 +310,7 @@ class RepresentableBlockPredictor(GluonPredictor):
         dtype: DType = np.float32,
     ) -> None:
         super().__init__(
-            input_names=get_hybrid_forward_input_names(prediction_net),
+            input_names=get_hybrid_forward_input_names(type(prediction_net)),
             prediction_net=prediction_net,
             batch_size=batch_size,
             prediction_length=prediction_length,

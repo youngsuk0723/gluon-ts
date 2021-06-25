@@ -13,8 +13,6 @@
 
 from typing import List, Tuple
 
-import numpy as np
-import pandas as pd
 from pandas.tseries.frequencies import to_offset
 
 from gluonts.core.component import validated
@@ -22,12 +20,14 @@ from gluonts.mx import Tensor
 from gluonts.mx.distribution.distribution import getF
 from gluonts.mx.util import _broadcast_param
 from gluonts.time_feature import (
-    TimeFeature,
+    Constant as ZeroFeature,
     DayOfWeekIndex,
     HourOfDayIndex,
     MinuteOfHourIndex,
     MonthOfYearIndex,
+    TimeFeature,
     WeekOfYearIndex,
+    norm_freq_str,
 )
 
 
@@ -91,15 +91,6 @@ def _make_2_block_diagonal(F, left: Tensor, right: Tensor) -> Tensor:
     return _block_diagonal
 
 
-class ZeroFeature(TimeFeature):
-    """
-    A feature that is identically zero.
-    """
-
-    def __call__(self, index: pd.DatetimeIndex) -> np.ndarray:
-        return np.zeros(index.values.shape)
-
-
 class ISSM:
     r"""
     An abstract class for providing the basic structure of Innovation State Space Model (ISSM).
@@ -107,7 +98,7 @@ class ISSM:
     The structure of ISSM is given by
 
         * dimension of the latent state
-        * transition and innovation coefficents of the transition model
+        * transition and innovation coefficients of the transition model
         * emission coefficient of the observation model
 
     """
@@ -312,7 +303,7 @@ class CompositeISSM(ISSM):
 
         if offset.name == "M":
             seasonal_issms = [MonthOfYearSeasonalISSM()]
-        elif offset.name == "W-SUN":
+        elif norm_freq_str(offset.name) == "W":
             seasonal_issms = [WeekOfYearSeasonalISSM()]
         elif offset.name == "D":
             seasonal_issms = [DayOfWeekSeasonalISSM()]

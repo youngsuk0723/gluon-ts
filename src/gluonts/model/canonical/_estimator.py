@@ -11,28 +11,40 @@
 # express or implied. See the License for the specific language governing
 # permissions and limitations under the License.
 
+from functools import partial
 from typing import List
 
 from mxnet.gluon import HybridBlock, nn
 
 from gluonts.core.component import validated
+from gluonts.dataset.common import Dataset
 from gluonts.dataset.field_names import FieldName
-from gluonts.mx.model.estimator import GluonEstimator
+from gluonts.dataset.loader import (
+    DataLoader,
+    TrainDataLoader,
+    ValidationDataLoader,
+)
+from gluonts.env import env
 from gluonts.model.predictor import Predictor
+from gluonts.mx.batchify import as_in_context, batchify
 from gluonts.mx.block.feature import FeatureEmbedder
 from gluonts.mx.block.rnn import RNN
 from gluonts.mx.distribution import DistributionOutput, StudentTOutput
+from gluonts.mx.model.estimator import GluonEstimator
 from gluonts.mx.model.predictor import RepresentableBlockPredictor
 from gluonts.mx.trainer import Trainer
+from gluonts.mx.util import get_hybrid_forward_input_names
+from gluonts.support.util import maybe_len
 from gluonts.time_feature import time_features_from_frequency_str
 from gluonts.transform import (
     AddTimeFeatures,
     AsNumpyArray,
-    Chain,
     InstanceSplitter,
+    SelectFields,
     SetFieldIfNotPresent,
     TestSplitSampler,
     Transformation,
+    ValidationSplitSampler,
 )
 
 from ._network import CanonicalPredictionNetwork, CanonicalTrainingNetwork
@@ -68,31 +80,75 @@ class CanonicalEstimator(GluonEstimator):
         self.is_sequential = is_sequential
 
     def create_transformation(self) -> Transformation:
-        return Chain(
-            trans=[
-                AsNumpyArray(field=FieldName.TARGET, expected_ndim=1),
-                AddTimeFeatures(
-                    start_field=FieldName.START,
-                    target_field=FieldName.TARGET,
-                    output_field=FieldName.FEAT_TIME,
-                    time_features=time_features_from_frequency_str(self.freq),
-                    pred_length=self.prediction_length,
-                ),
-                SetFieldIfNotPresent(
-                    field=FieldName.FEAT_STATIC_CAT, value=[0.0]
-                ),
-                AsNumpyArray(field=FieldName.FEAT_STATIC_CAT, expected_ndim=1),
-                InstanceSplitter(
-                    target_field=FieldName.TARGET,
-                    is_pad_field=FieldName.IS_PAD,
-                    start_field=FieldName.START,
-                    forecast_start_field=FieldName.FORECAST_START,
-                    train_sampler=TestSplitSampler(),
-                    time_series_fields=[FieldName.FEAT_TIME],
-                    past_length=self.context_length,
-                    future_length=self.prediction_length,
-                ),
-            ]
+        return (
+            AsNumpyArray(field=FieldName.TARGET, expected_ndim=1)
+            + AddTimeFeatures(
+                start_field=FieldName.START,
+                target_field=FieldName.TARGET,
+                output_field=FieldName.FEAT_TIME,
+                time_features=time_features_from_frequency_str(self.freq),
+                pred_length=self.prediction_length,
+            )
+            + SetFieldIfNotPresent(
+                field=FieldName.FEAT_STATIC_CAT, value=[0.0]
+            )
+            + AsNumpyArray(field=FieldName.FEAT_STATIC_CAT, expected_ndim=1)
+        )
+
+    def _create_instance_splitter(self, mode: str):
+        assert mode in ["training", "validation", "test"]
+
+        instance_sampler = {
+            "training": ValidationSplitSampler(
+                min_future=self.prediction_length
+            ),
+            "validation": ValidationSplitSampler(
+                min_future=self.prediction_length
+            ),
+            "test": TestSplitSampler(),
+        }[mode]
+
+        return InstanceSplitter(
+            target_field=FieldName.TARGET,
+            is_pad_field=FieldName.IS_PAD,
+            start_field=FieldName.START,
+            forecast_start_field=FieldName.FORECAST_START,
+            instance_sampler=instance_sampler,
+            time_series_fields=[FieldName.FEAT_TIME],
+            past_length=self.context_length,
+            future_length=self.prediction_length,
+        )
+
+    def create_training_data_loader(
+        self,
+        data: Dataset,
+        **kwargs,
+    ) -> DataLoader:
+        input_names = get_hybrid_forward_input_names(CanonicalTrainingNetwork)
+        with env._let(max_idle_transforms=maybe_len(data) or 0):
+            instance_splitter = self._create_instance_splitter("training")
+        return TrainDataLoader(
+            dataset=data,
+            transform=instance_splitter + SelectFields(input_names),
+            batch_size=self.batch_size,
+            stack_fn=partial(batchify, ctx=self.trainer.ctx, dtype=self.dtype),
+            decode_fn=partial(as_in_context, ctx=self.trainer.ctx),
+            **kwargs,
+        )
+
+    def create_validation_data_loader(
+        self,
+        data: Dataset,
+        **kwargs,
+    ) -> DataLoader:
+        input_names = get_hybrid_forward_input_names(CanonicalTrainingNetwork)
+        with env._let(max_idle_transforms=maybe_len(data) or 0):
+            instance_splitter = self._create_instance_splitter("validation")
+        return ValidationDataLoader(
+            dataset=data,
+            transform=instance_splitter + SelectFields(input_names),
+            batch_size=self.batch_size,
+            stack_fn=partial(batchify, ctx=self.trainer.ctx, dtype=self.dtype),
         )
 
     def create_training_network(self) -> CanonicalTrainingNetwork:
@@ -111,6 +167,8 @@ class CanonicalEstimator(GluonEstimator):
         transformation: Transformation,
         trained_network: CanonicalTrainingNetwork,
     ) -> Predictor:
+        prediction_splitter = self._create_instance_splitter("test")
+
         prediction_net = CanonicalPredictionNetwork(
             embedder=trained_network.embedder,
             model=trained_network.model,
@@ -122,7 +180,7 @@ class CanonicalEstimator(GluonEstimator):
         )
 
         return RepresentableBlockPredictor(
-            input_transform=transformation,
+            input_transform=transformation + prediction_splitter,
             prediction_net=prediction_net,
             batch_size=self.batch_size,
             freq=self.freq,
@@ -151,7 +209,7 @@ class CanonicalRNNEstimator(CanonicalEstimator):
             mode=cell_type, num_layers=num_layers, num_hidden=num_cells
         )
 
-        super(CanonicalRNNEstimator, self).__init__(
+        super().__init__(
             model=model,
             is_sequential=True,
             freq=freq,
@@ -191,7 +249,7 @@ class MLPForecasterEstimator(CanonicalEstimator):
                 )
             )
 
-        super(MLPForecasterEstimator, self).__init__(
+        super().__init__(
             model=model,
             is_sequential=False,
             freq=freq,

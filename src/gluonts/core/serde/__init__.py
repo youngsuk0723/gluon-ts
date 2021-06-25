@@ -11,16 +11,19 @@
 # express or implied. See the License for the specific language governing
 # permissions and limitations under the License.
 
-
+from . import flat
 from ._base import Stateful, Stateless, decode, encode
 from ._json import dump_json, load_json
 from ._repr import dump_code, load_code
 
 # TODO: remove
-from .np import *
-from .pd import *
+# These are needed because we implement `encode` for numpy and pandas types in
+# submodules.
+from .np import *  # noqa
+from .pd import *  # noqa
 
 __all__ = [
+    "flat",
     "encode",
     "decode",
     "dump_code",
